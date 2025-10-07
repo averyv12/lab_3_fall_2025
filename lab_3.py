@@ -5,7 +5,7 @@ from std_msgs.msg import Float64MultiArray
 import numpy as np
 np.set_printoptions(precision=3, suppress=True)
 
-Kp = 3
+Kp = 0.01     # kp = 3
 Kd = 0.1
 
 class InverseKinematics(Node):
@@ -25,8 +25,8 @@ class InverseKinematics(Node):
             10
         )
 
-        self.pd_timer_period = 1.0 / 200  # 200 Hz
-        self.ik_timer_period = 1.0 / 20   # 10 Hz
+        self.pd_timer_period = 1.0 / 200  # 200 Hz     # self.pd_timer_period = 1.0 / 200  # 200 Hz
+        self.ik_timer_period = 1.0 / 20   # 10 Hz      # self.ik_timer_period = 1.0 / 20   # 10 Hz
         self.pd_timer = self.create_timer(self.pd_timer_period, self.pd_timer_callback)
         self.ik_timer = self.create_timer(self.ik_timer_period, self.ik_timer_callback)
 
@@ -137,9 +137,9 @@ class InverseKinematics(Node):
             return num / denom
 
         theta = np.array(initial_guess)
-        learning_rate = 5 # TODO: Set the learning rate
-        max_iterations = 100 # TODO: Set the maximum number of iterations
-        tolerance = 0.001 # TODO: Set the tolerance for the L1 norm of the error
+        learning_rate = 10 # TODO: Set the learning rate
+        max_iterations = 20 # TODO: Set the maximum number of iterations
+        tolerance = 0.0001 # TODO: Set the tolerance for the L1 norm of the error
 
         cost_l = []
         for _ in range(max_iterations):
@@ -152,7 +152,6 @@ class InverseKinematics(Node):
             # TODO (BONUS): Implement the (quasi-)Newton's method instead of finite differences for faster convergence
             ################################################################################################
             new_theta = theta - learning_rate * grad
-            print("new theta", new_theta)
             cost, distance = cost_function(new_theta)
             if cost < tolerance:
                 break
@@ -169,36 +168,35 @@ class InverseKinematics(Node):
         # TODO: Implement the interpolation function
         ################################################################################################
         touchdown, liftoff, midswing = self.ee_triangle_positions
+
         t_mod = t % 3
-        if t_mod < 1.0:
-            xp = [0, 1.0]
-            interp_x = np.interp(t, xp, [touchdown[0], liftoff[0]])
-            interp_y = np.interp(t, xp, [touchdown[1], liftoff[1]])
-            interp_z = np.interp(t, xp, [touchdown[2], liftoff[2]])
-        elif t_mod < 2.0:
-            xp = [1.0, 2.0]
-            interp_x = np.interp(t, xp, [liftoff[0], midswing[0]])
-            interp_y = np.interp(t, xp, [liftoff[1], midswing[1]])
-            interp_z = np.interp(t, xp, [liftoff[2], midswing[2]])
+        if 0 <= t_mod < 1.0:
+            return [touchdown[0] + t_mod * (liftoff[0] - touchdown[0]), touchdown[1] + t_mod * (liftoff[1] - touchdown[1]), touchdown[2] + t_mod * (liftoff[2] - touchdown[2])]
+        elif 1.0 <= t_mod < 2.0:
+            t_frame = t_mod - 1
+            return [liftoff[0] + t_frame * (midswing[0] - liftoff[0]), liftoff[1] + t_frame * (midswing[1] - liftoff[1]), liftoff[2] + t_frame * (midswing[2] - liftoff[2])]
         else:
-            xp = [2.0, 3.0]
-            interp_x = np.interp(t, xp, [midswing[0], touchdown[0]])
-            interp_y = np.interp(t, xp, [midswing[1], touchdown[1]])
-            interp_z = np.interp(t, xp, [midswing[2], touchdown[2]])
-        return [interp_x, interp_y, interp_z]
+            t_frame = t_mod - 2
+            return [midswing[0] + t_frame * (touchdown[0] - midswing[0]), midswing[1] + t_frame * (touchdown[1] - midswing[1]), midswing[2] + t_frame * (touchdown[2] - midswing[2])]
 
     def ik_timer_callback(self):
         if self.joint_positions is not None:
+            # figures out place where it should go
             target_ee = self.interpolate_triangle(self.t)
+
+            # figures out joint angles to get there
             self.target_joint_positions = self.inverse_kinematics(target_ee, self.joint_positions)
-            print(len(target_ee))
+
+            # figure out where we are
             current_ee = self.forward_kinematics(*self.joint_positions)
 
             # update the current time for the triangle interpolation
             ################################################################################################
             # TODO: Implement the time update
             ################################################################################################
+            self.t = self.t + self.ik_timer_period
             
+
             self.get_logger().info(f'Target EE: {target_ee}, Current EE: {current_ee}, Target Angles: {self.target_joint_positions}, Target Angles to EE: {self.forward_kinematics(*self.target_joint_positions)}, Current Angles: {self.joint_positions}')
 
     def pd_timer_callback(self):
