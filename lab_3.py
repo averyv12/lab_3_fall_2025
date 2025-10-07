@@ -51,10 +51,61 @@ class InverseKinematics(Node):
         self.joint_velocities = np.array([msg.velocity[msg.name.index(joint)] for joint in joints_of_interest])
 
     def forward_kinematics(self, theta1, theta2, theta3):
-        ################################################################################################
-        # TODO: Compute the forward kinematics for the front right leg (should be easy after lab 2!)
-        ################################################################################################
-        return
+
+        def rotation_x(angle):
+            # rotation about the x-axis implemented for you
+            return np.array(
+                [
+                    [1, 0, 0, 0],
+                    [0, np.cos(angle), -np.sin(angle), 0],
+                    [0, np.sin(angle), np.cos(angle), 0],
+                    [0, 0, 0, 1],
+                ]
+            )
+
+        def rotation_y(angle):
+            return np.array([
+                [np.cos(angle), 0, np.sin(angle), 0],
+                [0, 1, 0, 0],
+                [-np.sin(angle), 0, np.cos(angle), 0],
+                [0, 0, 0, 1],
+            ])
+
+        def rotation_z(angle):
+            return np.array([
+                [np.cos(angle), -np.sin(angle), 0, 0],
+                [np.sin(angle), np.cos(angle), 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1],
+            ])
+
+        def translation(x, y, z):
+            ## TODO: Implement the translation matrix
+            return np.array([
+                [1, 0, 0, x],
+                [0, 1, 0, y],
+                [0, 0, 1, z],
+                [0, 0, 0, 1],
+            ])
+            raise NotImplementedError()
+
+        # T_0_1 (base_link to leg_front_l_1)
+        T_0_1 = translation(0.07500, -0.0445, 0) @ rotation_x(1.57080) @ rotation_z(theta1)
+
+        # T_1_2 (leg_front_l_1 to leg_front_l_2)
+        T_1_2 = translation(0,0, 0.03900) @ rotation_y(-1.57080) @ rotation_z(theta2)
+
+        # T_2_3 (leg_front_l_2 to leg_front_l_3)
+        T_2_3 = translation(0, -0.0494, 0.0685) @ rotation_y(1.57080) @ rotation_z(theta3)
+
+        # T_3_ee (leg_front_l_3 to end-effector)
+        T_3_ee = translation(0.06231, -0.06216, 0.018)
+
+        T_0_ee = T_0_1 @ T_1_2 @ T_2_3 @ T_3_ee
+
+        end_effector_position = T_0_ee[:3, -1]
+
+        return end_effector_position
 
     def inverse_kinematics(self, target_ee, initial_guess=[0, 0, 0]):
         def cost_function(theta):
@@ -64,19 +115,31 @@ class InverseKinematics(Node):
             # TODO: Implement the cost function
             # HINT: You can use the * notation on a list to "unpack" a list
             ################################################################################################
-            return None, None
+            x, y, z = theta
+            current_ee = self.forward_kinematics(x, y, z)
+            distance = np.abs(current_ee - target_ee)
+            cost = 0
+            for i in range(len(distance)):
+                cost += (distance[i]**2)
+                distance[i] = (distance[i]**2)
+            return cost, distance
 
         def gradient(theta, epsilon=1e-3):
             # Compute the gradient of the cost function using finite differences
             ################################################################################################
             # TODO: Implement the gradient computation
             ################################################################################################
-            return
+            ep_array = [epsilon, epsilon, epsilon]
+            _, distance1 = cost_function(theta + ep_array)
+            _, distance2 = cost_function(theta - ep_array)
+            num = distance1 - distance2
+            denom = 2 * epsilon
+            return num / denom
 
         theta = np.array(initial_guess)
-        learning_rate = None # TODO: Set the learning rate
-        max_iterations = None # TODO: Set the maximum number of iterations
-        tolerance = None # TODO: Set the tolerance for the L1 norm of the error
+        learning_rate = 5 # TODO: Set the learning rate
+        max_iterations = 100 # TODO: Set the maximum number of iterations
+        tolerance = 0.001 # TODO: Set the tolerance for the L1 norm of the error
 
         cost_l = []
         for _ in range(max_iterations):
@@ -88,6 +151,12 @@ class InverseKinematics(Node):
             # to determine if IK has converged
             # TODO (BONUS): Implement the (quasi-)Newton's method instead of finite differences for faster convergence
             ################################################################################################
+            new_theta = theta - learning_rate * grad
+            print("new theta", new_theta)
+            cost, distance = cost_function(new_theta)
+            if cost < tolerance:
+                break
+            theta = new_theta
 
         # print(f'Cost: {cost_l}') # Use to debug to see if you cost function converges within max_iterations
 
@@ -99,12 +168,30 @@ class InverseKinematics(Node):
         ################################################################################################
         # TODO: Implement the interpolation function
         ################################################################################################
-        return
+        touchdown, liftoff, midswing = self.ee_triangle_positions
+        t_mod = t % 3
+        if t_mod < 1.0:
+            xp = [0, 1.0]
+            interp_x = np.interp(t, xp, [touchdown[0], liftoff[0]])
+            interp_y = np.interp(t, xp, [touchdown[1], liftoff[1]])
+            interp_z = np.interp(t, xp, [touchdown[2], liftoff[2]])
+        elif t_mod < 2.0:
+            xp = [1.0, 2.0]
+            interp_x = np.interp(t, xp, [liftoff[0], midswing[0]])
+            interp_y = np.interp(t, xp, [liftoff[1], midswing[1]])
+            interp_z = np.interp(t, xp, [liftoff[2], midswing[2]])
+        else:
+            xp = [2.0, 3.0]
+            interp_x = np.interp(t, xp, [midswing[0], touchdown[0]])
+            interp_y = np.interp(t, xp, [midswing[1], touchdown[1]])
+            interp_z = np.interp(t, xp, [midswing[2], touchdown[2]])
+        return [interp_x, interp_y, interp_z]
 
     def ik_timer_callback(self):
         if self.joint_positions is not None:
             target_ee = self.interpolate_triangle(self.t)
             self.target_joint_positions = self.inverse_kinematics(target_ee, self.joint_positions)
+            print(len(target_ee))
             current_ee = self.forward_kinematics(*self.joint_positions)
 
             # update the current time for the triangle interpolation
